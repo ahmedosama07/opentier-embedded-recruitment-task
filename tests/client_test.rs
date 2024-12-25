@@ -6,7 +6,6 @@ use std::{
     sync::Arc,
     thread::{self, JoinHandle},
 };
-
 mod client;
 
 fn setup_server_thread(server: Arc<Server>) -> JoinHandle<()> {
@@ -15,14 +14,14 @@ fn setup_server_thread(server: Arc<Server>) -> JoinHandle<()> {
     })
 }
 
-fn create_server() -> Arc<Server> {
-    Arc::new(Server::new("localhost:8080").expect("Failed to start server"))
+fn create_server(addr: &str) -> Arc<Server> {
+    Server::new(addr).expect("Failed to create server")
 }
 
 #[test]
 fn test_client_connection() {
     // Set up the server in a separate thread
-    let server = create_server();
+    let server = create_server("localhost:8080");
     let handle = setup_server_thread(server.clone());
 
     // Create and connect the client
@@ -46,7 +45,7 @@ fn test_client_connection() {
 #[test]
 fn test_client_echo_message() {
     // Set up the server in a separate thread
-    let server = create_server();
+    let server = create_server("localhost:8080");
     let handle = setup_server_thread(server.clone());
 
     // Create and connect the client
@@ -93,10 +92,9 @@ fn test_client_echo_message() {
 }
 
 #[test]
-#[ignore = "please remove ignore and fix this test"]
 fn test_multiple_echo_messages() {
     // Set up the server in a separate thread
-    let server = create_server();
+    let server = create_server("localhost:8080");
     let handle = setup_server_thread(server.clone());
 
     // Create and connect the client
@@ -152,10 +150,9 @@ fn test_multiple_echo_messages() {
 }
 
 #[test]
-#[ignore = "please remove ignore and fix this test"]
 fn test_multiple_clients() {
     // Set up the server in a separate thread
-    let server = create_server();
+    let server = create_server("localhost:8080");
     let handle = setup_server_thread(server.clone());
 
     // Create and connect multiple clients
@@ -225,10 +222,9 @@ fn test_multiple_clients() {
 }
 
 #[test]
-#[ignore = "please remove ignore and fix this test"]
 fn test_client_add_request() {
     // Set up the server in a separate thread
-    let server = create_server();
+    let server = create_server("localhost:8080");
     let handle = setup_server_thread(server.clone());
 
     // Create and connect the client
@@ -260,6 +256,56 @@ fn test_client_add_request() {
             );
         }
         _ => panic!("Expected AddResponse, but received a different message"),
+    }
+
+    // Disconnect the client
+    assert!(
+        client.disconnect().is_ok(),
+        "Failed to disconnect from the server"
+    );
+
+    // Stop the server and wait for thread to finish
+    server.stop();
+    assert!(
+        handle.join().is_ok(),
+        "Server thread panicked or failed to join"
+    );
+}
+
+
+#[test]
+fn test_large_message() {
+    // Set up the server in a separate thread
+    let server = create_server("localhost:8080");
+    let handle = setup_server_thread(server.clone());
+
+    // Create and connect the client
+    let mut client = client::Client::new("localhost", 8080, 2000);
+    assert!(client.connect().is_ok());
+
+    // Prepare a large message
+    let mut echo_message = EchoMessage::default();
+    echo_message.content = "A".repeat(10_000); // 10,000 characters
+    let message = client_message::Message::EchoMessage(echo_message.clone());
+
+    // Send the large message to the server
+    assert!(client.send(message).is_ok(), "Failed to send large message");
+
+    // Receive the echoed large message
+    let response = client.receive();
+    assert!(
+        response.is_ok(),
+        "Failed to receive response for large EchoMessage"
+    );
+
+    match response.unwrap().message {
+        Some(server_message::Message::EchoMessage(echo)) => {
+            assert_eq!(
+                echo.content, echo_message.content,
+                "Echoed large message content does not match"
+            );
+        }
+        _ => panic!("Expected EchoMessage, but received a different message"),
     }
 
     // Disconnect the client

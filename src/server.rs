@@ -1,4 +1,11 @@
-use crate::message::EchoMessage;
+use crate::message::{
+    AddResponse, ClientMessage, EchoMessage, ServerMessage
+};
+
+use crate::message::client_message::Message as ClientMessageEnum;
+use crate::message::server_message::Message as ServerMessageEnum;
+
+
 use log::{error, info, warn};
 use prost::Message;
 use std::{
@@ -30,16 +37,39 @@ impl Client {
             return Ok(());
         }
 
-        if let Ok(message) = EchoMessage::decode(&buffer[..bytes_read]) {
-            info!("Received: {}", message.content);
-            // Echo back the message
-            let payload = message.encode_to_vec();
-            self.stream.write_all(&payload)?;
-            self.stream.flush()?;
-        } else {
-            error!("Failed to decode message");
-        }
+       // Decode the incoming message
+       if let Ok(client_message) = ClientMessage::decode(&buffer[..bytes_read]) {
+        info!("Decoded message from client: {:?}", client_message);
+        if let Some(client_msg) = client_message.message {
+            let response_message = match client_msg {
+                ClientMessageEnum::EchoMessage(echo) => {
+                    info!("Received EchoMessage: {:?}", echo);
+                    ServerMessageEnum::EchoMessage(EchoMessage { content: echo.content })
+                }
+                ClientMessageEnum::AddRequest(add) => {
+                    let result = add.a + add.b;
+                    ServerMessageEnum::AddResponse(AddResponse { result })
+                }
+            };
 
+            info!("Sending response to client: {:?}", response_message);
+
+            // Send the response back to the client
+            self.send_response(ServerMessage { message: Some(response_message) })?;
+        } else {
+            warn!("Received a ClientMessage with no message variant.");
+        }
+    } else {
+        error!("Failed to decode ClientMessage.");
+    }
+
+    Ok(())
+    }
+
+    fn send_response(&mut self, response: ServerMessage) -> io::Result<()> {
+        let mut buf = Vec::new();
+        response.encode(&mut buf)?;
+        self.stream.write_all(&buf)?;
         Ok(())
     }
 }
@@ -74,13 +104,18 @@ impl Server {
                     info!("New client connected: {}", addr);
 
                     // Handle the client request
-                    let mut client = Client::new(stream);
-                    while self.is_running.load(Ordering::SeqCst) {
-                        if let Err(e) = client.handle() {
-                            error!("Error handling client: {}", e);
-                            break;
+                    let is_running = Arc::clone(&self.is_running);
+        
+                    // Spawn a new thread to handle the client connection
+                    thread::spawn(move || {
+                        let mut client = Client::new(stream);
+                        while is_running.load(Ordering::SeqCst) {
+                            if let Err(e) = client.handle() {
+                                error!("Error handling client: {}", e);
+                                break;
+                            }
                         }
-                    }
+                    });
                 }
                 Err(ref e) if e.kind() == ErrorKind::WouldBlock => {
                     // No incoming connections, sleep briefly to reduce CPU usage
