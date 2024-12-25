@@ -75,7 +75,10 @@ These components and functionalities ensure that the client can communicate effe
    - Ensures that the server returns the correct result (the sum of two numbers).
 
 6. **`test_client_echo_large_message`**:
-   - Tests that the server can handle large messages (up to 100,000 characters).
+   - Tests that the server can handle large messages.
+   - Verifies that the echoed message's content matches the original large message sent by the client.
+7. **`test_multiple_clients_large_message`**:
+   - Tests that the server can handle multiple clients with large messages.
    - Verifies that the echoed message's content matches the original large message sent by the client.
 
 ### **Test Setup**
