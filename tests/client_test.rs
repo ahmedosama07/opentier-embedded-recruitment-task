@@ -1,12 +1,12 @@
 use embedded_recruitment_task::{
     message::{client_message, server_message, AddRequest, EchoMessage},
     server::Server,
+    client::Client,
 };
 use std::{
     sync::Arc,
     thread::{self, JoinHandle},
 };
-mod client;
 
 fn setup_server_thread(server: Arc<Server>) -> JoinHandle<()> {
     thread::spawn(move || {
@@ -25,7 +25,7 @@ fn test_client_connection() {
     let handle = setup_server_thread(server.clone());
 
     // Create and connect the client
-    let mut client = client::Client::new("localhost", 8080, 1000);
+    let mut client = Client::new("localhost", 8080, 1000);
     assert!(client.connect().is_ok(), "Failed to connect to the server");
 
     // Disconnect the client
@@ -49,7 +49,7 @@ fn test_client_echo_message() {
     let handle = setup_server_thread(server.clone());
 
     // Create and connect the client
-    let mut client = client::Client::new("localhost", 8080, 1000);
+    let mut client = Client::new("localhost", 8080, 1000);
     assert!(client.connect().is_ok(), "Failed to connect to the server");
 
     // Prepare the message
@@ -98,7 +98,7 @@ fn test_multiple_echo_messages() {
     let handle = setup_server_thread(server.clone());
 
     // Create and connect the client
-    let mut client = client::Client::new("localhost", 8080, 1000);
+    let mut client = Client::new("localhost", 8080, 1000);
     assert!(client.connect().is_ok(), "Failed to connect to the server");
 
     // Prepare multiple messages
@@ -157,9 +157,9 @@ fn test_multiple_clients() {
 
     // Create and connect multiple clients
     let mut clients = vec![
-        client::Client::new("localhost", 8080, 1000),
-        client::Client::new("localhost", 8080, 1000),
-        client::Client::new("localhost", 8080, 1000),
+        Client::new("localhost", 8080, 1000),
+        Client::new("localhost", 8080, 1000),
+        Client::new("localhost", 8080, 1000),
     ];
 
     for client in clients.iter_mut() {
@@ -228,7 +228,7 @@ fn test_client_add_request() {
     let handle = setup_server_thread(server.clone());
 
     // Create and connect the client
-    let mut client = client::Client::new("localhost", 8080, 1000);
+    let mut client = Client::new("localhost", 8080, 1000);
     assert!(client.connect().is_ok(), "Failed to connect to the server");
 
     // Prepare the message
@@ -274,35 +274,35 @@ fn test_client_add_request() {
 
 
 #[test]
-fn test_large_message() {
+fn test_client_echo_large_message() {
     // Set up the server in a separate thread
     let server = create_server("localhost:8080");
     let handle = setup_server_thread(server.clone());
 
     // Create and connect the client
-    let mut client = client::Client::new("localhost", 8080, 2000);
-    assert!(client.connect().is_ok());
+    let mut client = Client::new("localhost", 8080, 2000);
+    assert!(client.connect().is_ok(), "Failed to connect to the server");
 
-    // Prepare a large message
+    // Prepare the message
     let mut echo_message = EchoMessage::default();
-    echo_message.content = "A".repeat(10_000); // 10,000 characters
+    echo_message.content = "a".repeat(100000).to_string();
     let message = client_message::Message::EchoMessage(echo_message.clone());
 
-    // Send the large message to the server
-    assert!(client.send(message).is_ok(), "Failed to send large message");
+    // Send the message to the server
+    assert!(client.send(message).is_ok(), "Failed to send message");
 
-    // Receive the echoed large message
+    // Receive the echoed message
     let response = client.receive();
     assert!(
         response.is_ok(),
-        "Failed to receive response for large EchoMessage"
+        "Failed to receive response for EchoMessage"
     );
 
     match response.unwrap().message {
         Some(server_message::Message::EchoMessage(echo)) => {
             assert_eq!(
                 echo.content, echo_message.content,
-                "Echoed large message content does not match"
+                "Echoed message content does not match"
             );
         }
         _ => panic!("Expected EchoMessage, but received a different message"),
