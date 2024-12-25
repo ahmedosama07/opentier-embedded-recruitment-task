@@ -1,4 +1,4 @@
-use embedded_recruitment_task::message::{client_message, ServerMessage};
+use crate::message::{client_message, ClientMessage, ServerMessage};
 use log::error;
 use log::info;
 use prost::Message;
@@ -64,15 +64,18 @@ impl Client {
     // generic message to send message to the server
     pub fn send(&mut self, message: client_message::Message) -> io::Result<()> {
         if let Some(ref mut stream) = self.stream {
-            // Encode the message to a buffer
-            let mut buffer = Vec::new();
-            message.encode(&mut buffer);
+            let msg = ClientMessage {
+                message: Some(message),
+            };
+            let payload = msg.encode_to_vec();
+            let len = payload.len() as u32;
 
             // Send the buffer to the server
-            stream.write_all(&buffer)?;
+            stream.write_all(&len.to_be_bytes())?;
+            stream.write_all(&payload)?;
             stream.flush()?;
 
-            println!("Sent message: {:?}", message);
+            println!("Sent message: {:?}", msg);
             Ok(())
         } else {
             Err(io::Error::new(
@@ -85,20 +88,14 @@ impl Client {
     pub fn receive(&mut self) -> io::Result<ServerMessage> {
         if let Some(ref mut stream) = self.stream {
             info!("Receiving message from the server");
-            let mut buffer = vec![0u8; 1024];
-            let bytes_read = stream.read(&mut buffer)?;
-            if bytes_read == 0 {
-                info!("Server disconnected.");
-                return Err(io::Error::new(
-                    io::ErrorKind::ConnectionAborted,
-                    "Server disconnected",
-                ));
-            }
-
-            info!("Received {} bytes from the server", bytes_read);
-
+            let mut len = [0u8; 4];
+            stream.read_exact(&mut len)?;
+            let message_len = u32::from_be_bytes(len) as usize;
+            let mut buffer = vec![0u8; message_len];
+            stream.read_exact(&mut buffer)?;
+            
             // Decode the received message
-            ServerMessage::decode(&buffer[..bytes_read]).map_err(|e| {
+            ServerMessage::decode(&buffer[..]).map_err(|e| {
                 io::Error::new(
                     io::ErrorKind::InvalidData,
                     format!("Failed to decode ServerMessage: {}", e),
