@@ -8,6 +8,7 @@ build = "build.rs"
 log = "0.4.2"
 prost = "0.13.4"
 prost-types = "0.13.4"
+lazy_static = "1.4.0"
 
 [build-dependencies]
 prost-build = "0.13.4"

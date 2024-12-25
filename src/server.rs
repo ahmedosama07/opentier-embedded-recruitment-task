@@ -5,10 +5,11 @@ use crate::message::{
 use crate::message::client_message::Message as ClientMessageEnum;
 use crate::message::server_message::Message as ServerMessageEnum;
 
-
 use log::{error, info, warn};
 use prost::Message;
+use std::sync::{Mutex, MutexGuard};
 use std::{
+    collections::HashMap,
     io::{self, ErrorKind, Read, Write},
     net::{TcpListener, TcpStream},
     sync::{
@@ -19,6 +20,12 @@ use std::{
     time::Duration,
 };
 
+use lazy_static::lazy_static;
+
+lazy_static! {
+    static ref SERVERS: Arc<Mutex<HashMap<String, Arc<Server>>>> = Arc::new(Mutex::new(HashMap::new()));
+}
+#[derive(Debug)]
 struct Client {
     stream: TcpStream,
 }
@@ -37,33 +44,36 @@ impl Client {
             return Ok(());
         }
 
-       // Decode the incoming message
-       if let Ok(client_message) = ClientMessage::decode(&buffer[..bytes_read]) {
-        info!("Decoded message from client: {:?}", client_message);
-        if let Some(client_msg) = client_message.message {
-            let response_message = match client_msg {
-                ClientMessageEnum::EchoMessage(echo) => {
-                    info!("Received EchoMessage: {:?}", echo);
-                    ServerMessageEnum::EchoMessage(EchoMessage { content: echo.content })
+        match ClientMessage::decode(&buffer[..bytes_read]) {
+            Ok(client_message) => {
+                info!("Decoded message from client: {:?}", client_message);
+                if let Some(client_msg) = client_message.message {
+                    let response_message = self.process_message(client_msg);
+                    self.send_response(ServerMessage { message: Some(response_message) })?;
+                } else {
+                    warn!("Received an empty message.");
                 }
-                ClientMessageEnum::AddRequest(add) => {
-                    let result = add.a + add.b;
-                    ServerMessageEnum::AddResponse(AddResponse { result })
-                }
-            };
-
-            info!("Sending response to client: {:?}", response_message);
-
-            // Send the response back to the client
-            self.send_response(ServerMessage { message: Some(response_message) })?;
-        } else {
-            warn!("Received a ClientMessage with no message variant.");
+            }
+            Err(err) => {
+                error!("Failed to decode ClientMessage. Error: {:?}, Data: {:?}", err, &buffer[..bytes_read]);
+            }
         }
-    } else {
-        error!("Failed to decode ClientMessage.");
+
+        Ok(())
     }
 
-    Ok(())
+    fn process_message(&self, client_msg: ClientMessageEnum) -> ServerMessageEnum {
+        match client_msg {
+            ClientMessageEnum::EchoMessage(echo) => {
+                info!("Processing EchoMessage.");
+                ServerMessageEnum::EchoMessage(EchoMessage { content: echo.content })
+            }
+            ClientMessageEnum::AddRequest(add) => {
+                let result = add.a + add.b;
+                info!("Processing AddRequest. Result: {}", result);
+                ServerMessageEnum::AddResponse(AddResponse { result })
+            }
+        }
     }
 
     fn send_response(&mut self, response: ServerMessage) -> io::Result<()> {
@@ -74,21 +84,50 @@ impl Client {
     }
 }
 
+#[derive(Debug)]
 pub struct Server {
     listener: TcpListener,
     is_running: Arc<AtomicBool>,
+    client_cnt: Arc<Mutex<usize>>,
 }
 
 impl Server {
     /// Creates a new server instance
-    pub fn new(addr: &str) -> io::Result<Self> {
-        let listener = TcpListener::bind(addr)?;
-        let is_running = Arc::new(AtomicBool::new(false));
-        Ok(Server {
-            listener,
-            is_running,
-        })
+    pub fn new(addr: &str) -> io::Result<Arc<Self>> {
+        let mut servers_lock = SERVERS.lock().unwrap();
+        info!("Server instances: {:?}", *servers_lock);
+
+        if let Some(server) = servers_lock.get(addr) {
+            warn!("Server address {} already in use.", addr);
+            {
+                let mut  cnt = server.client_cnt.lock().unwrap();
+                *cnt += 1;
+            }
+            return  Ok(Arc::clone(server));
+        }
+        match TcpListener::bind(addr) {
+            Ok(listener) => {
+                let is_running = Arc::new(AtomicBool::new(false));
+                let client_cnt = Arc::new(Mutex::new(1));
+                let server = Arc::new(Server {
+                    listener,
+                    is_running,
+                    client_cnt,
+                });
+                servers_lock.insert(addr.to_string(), Arc::clone(&server));
+                Ok(server)
+            }
+            Err(ref e) if e.kind() == ErrorKind::AddrInUse => {
+                eprintln!("Address {} is already in use.", addr);
+                Err(io::Error::new(e.kind(), e.to_string()))
+            }
+            Err(e) => {
+                eprintln!("Failed to bind to address {}: {}", addr, e);
+                Err(e)
+            }    
+        }
     }
+
 
     /// Runs the server, listening for incoming connections and handling them
     pub fn run(&self) -> io::Result<()> {
@@ -133,11 +172,25 @@ impl Server {
 
     /// Stops the server by setting the `is_running` flag to `false`
     pub fn stop(&self) {
-        if self.is_running.load(Ordering::SeqCst) {
-            self.is_running.store(false, Ordering::SeqCst);
-            info!("Shutdown signal sent.");
+        let mut cnt = self.client_cnt.lock().unwrap();
+        if *cnt == 1 {
+            if self.is_running.load(Ordering::SeqCst) {
+                self.is_running.store(false, Ordering::SeqCst);
+                info!("Shutdown signal sent.");
+
+                let mut server_lock:MutexGuard<'_, HashMap<String, Arc<Server>>> = SERVERS.lock().unwrap();
+                let addr = self.listener.local_addr().unwrap().to_string();
+                server_lock.remove(&addr);
+            } else {
+                warn!("Server was already stopped or not running.");
+            }
         } else {
-            warn!("Server was already stopped or not running.");
+            {
+                *cnt -= 1;
+                info!("Client disconnected.");
+            }
+            info!("Clients: {}", *cnt)
         }
+        
     }
 }
